@@ -1,0 +1,136 @@
+#!/system/bin/sh
+
+# Mounts the chroot environment
+start_environment()
+{
+    # Allows the use of setuid binaries
+    $BUSYBOX mount -o remount,suid /data
+
+    # Links the standard streams to their file descriptor
+    [ ! -e "/dev/fd" ] && ln -s /proc/self/fd /dev/
+    [ ! -e "/dev/stdin" ] && ln -s /proc/self/fd/0 /dev/stdin
+    [ ! -e "/dev/stdout" ] && ln -s /proc/self/fd/1 /dev/stdout
+    [ ! -e "/dev/stderr" ] && ln -s /proc/self/fd/2 /dev/stderr
+
+    # Copies the busybox binary
+    if [ ! -f "$CHROOTMGR_ENV"/bin/busybox ]; then
+        cp "$BUSYBOX" "$CHROOTMGR_ENV"/bin/busybox
+        chmod 755 "$CHROOTMGR_ENV"/bin/busybox
+    fi
+
+    # Mounts the /proc filesystem
+    mkdir -p "$CHROOTMGR_ENV"/proc
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/proc && $BUSYBOX mount -t proc /proc "$CHROOTMGR_ENV"/proc
+
+    # Mounts the /dev filesystem
+    mkdir -p "$CHROOTMGR_ENV"/dev
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/dev && $BUSYBOX mount --bind /dev "$CHROOTMGR_ENV"/dev
+
+    # Mounts the /dev/pts filesystem
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/dev/pts && $BUSYBOX mount -t devpts devpts "$CHROOTMGR_ENV"/dev/pts
+
+    # Mounts the /dev/shm filesystem
+    mkdir -p "$CHROOTMGR_ENV"/dev/shm
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/dev/shm && $BUSYBOX mount -o rw,nosuid,nodev,mode=1777 -t tmpfs tmpfs "$CHROOTMGR_ENV"/dev/shm
+
+    # Mounts the /run filesystem
+    mkdir -p "$CHROOTMGR_ENV"/run
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/run && $BUSYBOX mount -t tmpfs -o rw,nosuid,nodev,mode=755 tmpfs "$CHROOTMGR_ENV/run"
+    mkdir -p "$CHROOTMGR_ENV"/run/user/0
+    chmod 700 "$CHROOTMGR_ENV"/run/user/0
+
+    # Mounts the /sdcard filesystem
+    mkdir -p "$CHROOTMGR_ENV"/sdcard
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/sdcard && $BUSYBOX mount -t sdcardfs /sdcard "$CHROOTMGR_ENV"/sdcard
+
+    # Mounts the /sys filesystem
+    mkdir -p "$CHROOTMGR_ENV"/sys
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/sys && $BUSYBOX mount -t sysfs /sys "$CHROOTMGR_ENV"/sys
+
+    # Mounts the /system filesystem
+    mkdir -p "$CHROOTMGR_ENV"/system
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/system && $BUSYBOX mount --bind /system "$CHROOTMGR_ENV"/system
+
+    # Creates the /etc/resolv.conf file
+    true > "$CHROOTMGR_ENV"/etc/resolv.conf
+    for server in 1 2 3 4; do
+        [ -z "$(getprop net.dns$server)" ] && break
+        echo "nameserver $(getprop net.dns$server)" >> "$CHROOTMGR_ENV"/etc/resolv.conf
+    done
+
+    # Creates the /etc/hosts file
+    true > "$CHROOTMGR_ENV"/etc/hosts
+    echo "127.0.0.1     localhost $CHROOTMGR_HNAME" >> "$CHROOTMGR_ENV"/etc/hosts
+    echo "::1           localhost ip6-localhost ip6-loopback" >> "$CHROOTMGR_ENV"/etc/hosts
+    $BUSYBOX hostname "$CHROOTMGR_HNAME"
+
+    # Sets the appropriate environment variables
+    export TMPDIR=/tmp
+    export PATH=/usr/bin:/usr/sbin:/bin:/usr/local/bin:/usr/local/sbin:"$PATH"
+}
+
+# Unmounts the chroot environment
+stop_environment()
+{
+    # Disallows the use of suid binaries
+    $BUSYBOX mount -o remount,nosuid /data
+
+    # Unmounts previously mounted filesystems
+    for mount_point in run proc dev/pts dev/shm dev sdcard sys system; do
+        $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/$mount_point && $BUSYBOX umount "$CHROOTMGR_ENV"/${mount_point}
+    done
+}
+
+# Prints HELP Usage
+if [ $# -eq 0 ]; then
+    echo "$0: A lightweight utility to create safe, isolated chroot environments."
+    echo "Usage: $0 <environment> <command> <command-args>"
+    exit
+fi
+
+# Checks for popular busybox install locations
+if [ -z $BUSYBOX ]; then
+    if [ -x /sbin/busybox ]; then
+        BUSYBOX=/sbin/busybox
+    elif [ -x /system/bin/busybox ]; then
+        BUSYBOX=/system/bin/busybox
+    elif [ -x /system/xbin/busybox ]; then
+        BUSYBOX=/system/xbin/busybox
+    elif [ -x /data/local/bin/busybox ]; then
+        BUSYBOX=/data/local/bin/busybox
+    else
+        echo "$0: Cannot locate the busybox binary."
+        echo "Manually set it using the $BUSYBOX variable."
+        exit 1
+    fi
+fi
+
+# Check if the user has root permissions 
+if [ "$(id -u)" -ne 0 ]; then
+    echo "$0: Missing required super-user permisions."
+    exit 1
+fi
+
+# Configures parameters
+CHROOTMGR_ENV=$1
+shift
+CHROOTMGR_EXEC=$@
+CHROOTMGR_HNAME="$(basename "$CHROOTMGR_ENV")"
+
+# Defines the default chroot command
+if [ -z "$CHROOTMGR_EXEC" ]; then
+    CHROOTMGR_EXEC="/bin/su"
+fi
+
+echo "Creating an isolated namespace, type \"exit\" in the current shell."
+$BUSYBOX unshare --mount
+
+echo "Starting environment \"$CHROOTMGR_ENV\""
+start_environment
+
+echo "Running chroot command \"$CHROOTMGR_EXEC\""
+$BUSYBOX chroot "$CHROOTMGR_ENV" $CHROOTMGR_EXEC
+eval "$BUSYBOX resize"
+
+echo "Stopping environment \"$CHROOTMGR_ENV\""
+stop_environment
