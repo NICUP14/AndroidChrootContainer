@@ -1,5 +1,8 @@
 # ACC - Android Chroot Container
 
+> [!NOTE]
+> The script only supports `aarch64`. It will terminate immediately if run on a different architecture.
+
 `ACC` is a script that provides a lightweight and minimal chroot environment for rooted Android devices. It manages an isolated, native Linux-like userland without depending on Termux or additional user-space layers. It's ideal for power users, developers, and tinkerers who want to run a sandboxed Linux environment as close to the actual Android system.
 
 ## Features
@@ -31,9 +34,7 @@
 
 ## Disclaimer
 
-```txt
 The software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software.
-```
 
 ## Installation Guide
 
