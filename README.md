@@ -10,8 +10,9 @@
 - Small and portable.
 - Runs a minimal Linux userland in a safe chroot environment.
 - Mounts key Android system paths to provide near-native Linux functionality.
-- Employs `unshare` to sandbox file system changes from the host Android system.
-- Requires no `Termux` or user-space layers.
+- Uses `unshare` to isolate mount points, so file system changes inside the chroot do not affect the host Android system.
+- Supports `/dev` overlayfs, creating a writable layer over device files without modifying the real `/dev`.
+- Requires no Termux or other user-space layers.
 
 ## Requirements
 
