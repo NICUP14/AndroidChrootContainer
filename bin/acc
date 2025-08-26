@@ -73,11 +73,6 @@ start_environment()
     mkdir -p "$CHROOTMGR_ENV"/tmp
     ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/tmp && $BUSYBOX mount -t tmpfs -o mode=1777,size=64M tmpfs "$CHROOTMGR_ENV"/tmp
 
-    # Mounts the /var filesystem
-    mkdir -p "$CHROOTMGR_ENV"/var
-    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/var && $BUSYBOX mount -t tmpfs tmpfs "$CHROOTMGR_ENV"/var
-    mkdir -p "$CHROOTMGR_ENV"/var/log "$CHROOTMGR_ENV"/var/run "$CHROOTMGR_ENV"/var/tmp
-
     # Creates the /etc/resolv.conf file
     true > "$CHROOTMGR_ENV"/etc/resolv.conf
     for server in 1 2 3 4; do
@@ -103,7 +98,7 @@ stop_environment()
     $BUSYBOX mount -o remount,nosuid /data
 
     # Unmounts previously mounted filesystems
-    for mount_point in var tmp system sys sdcard mnt/dev-upper dev/pts dev/shm dev proc; do
+    for mount_point in tmp system sys sdcard mnt/dev-upper dev/pts dev/shm dev proc; do
         if $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/$mount_point; then
             $BUSYBOX umount "$CHROOTMGR_ENV"/${mount_point} 2>/dev/null || $BUSYBOX umount -l "$CHROOTMGR_ENV"/${mount_point} 2>/dev/null
         fi
