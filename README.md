@@ -1,7 +1,7 @@
 # ACC - Android Chroot Container
 
-> [!NOTE] Android Chroot Container (ACC) is no longer actively maintained.  
-> Future development and improvements have moved to **DebDroid**, a lightweight Debian chroot environment for Android. Check it out here: [https://github.com/NICUP14/DebDroid](https://github.com/NICUP14/DebDroid)
+> [!NOTE]
+> Android Chroot Container (ACC) is no longer actively maintained. Future development and improvements have moved to **DebDroid**, a lightweight Debian chroot environment for Android. Check it out here: [https://github.com/NICUP14/DebDroid](https://github.com/NICUP14/DebDroid)
 
 > [!NOTE]
 > The script only supports `aarch64`. It will terminate immediately if run on a different architecture.
