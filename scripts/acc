@@ -1,0 +1,197 @@
+#!/system/bin/sh
+
+# Mounts the chroot environment
+start_environment()
+{
+    # Disables mount propagation
+    $BUSYBOX mount --make-rprivate /
+
+    # Prepares the image mountpoint
+    mkdir -p "$CHROOTMGR_ENV"
+    mount -o loop "$CHROOTMGR_IMG" "$CHROOTMGR_ENV"
+
+    # Links /dev/block loopback devices under /dev
+    for idx in $(seq 0 7); do
+        ln -s /dev/block/loop"$idx" /dev/loop"$idx"
+    done
+
+    # Links the standard streams to their file descriptor
+    [ ! -e "/dev/fd" ] && ln -s /proc/self/fd /dev/
+    [ ! -e "/dev/stdin" ] && ln -s /proc/self/fd/0 /dev/stdin
+    [ ! -e "/dev/stdout" ] && ln -s /proc/self/fd/1 /dev/stdout
+    [ ! -e "/dev/stderr" ] && ln -s /proc/self/fd/2 /dev/stderr
+
+    # Copies the busybox binary
+    if [ ! -f "$CHROOTMGR_ENV"/bin/busybox ]; then
+        cp "$BUSYBOX" "$CHROOTMGR_ENV"/bin/busybox
+        chmod 755 "$CHROOTMGR_ENV"/bin/busybox
+    fi
+
+    # Mounts the /proc filesystem
+    mkdir -p "$CHROOTMGR_ENV"/proc
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/proc && $BUSYBOX mount -t proc /proc "$CHROOTMGR_ENV"/proc
+
+    # Checks if the host has overlay support
+    if ! grep -q overlay /proc/filesystems 2>/dev/null; then
+        echo "$0: Missing overlay support, falling back to bind-mount for /dev."
+    fi
+
+    # Mounts the /dev filesystem (overlayed)
+    mkdir -p "$CHROOTMGR_ENV"/dev
+    mkdir -p "$CHROOTMGR_ENV"/mnt/dev-upper "$CHROOTMGR_ENV"/mnt/dev-work
+    chmod 700 "$CHROOTMGR_ENV"/mnt/dev-upper "$CHROOTMGR_ENV"/mnt/dev-work
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/mnt/dev-upper && $BUSYBOX mount -t tmpfs tmpfs "$CHROOTMGR_ENV"/mnt/dev-upper
+    if ! $BUSYBOX mount -t overlay overlay \
+            -o lowerdir=/dev,upperdir="$CHROOTMGR_ENV"/mnt/dev-upper,workdir="$CHROOTMGR_ENV"/mnt/dev-work \
+            "$CHROOTMGR_ENV"/dev 2>/dev/null; then
+        echo "$0: Overlay failed, falling back to bind-mount for /dev."
+        $BUSYBOX mount --bind /dev "$CHROOTMGR_ENV"/dev
+
+        # Cleans the unused tmpfs
+        $BUSYBOX umount "$CHROOTMGR_ENV"/mnt/dev-upper
+        rm -rf "$CHROOTMGR_ENV"/mnt/dev-upper "$CHROOTMGR_ENV"/mnt/dev-work
+    fi
+
+    # Mounts the /dev/pts filesystem
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/dev/pts && $BUSYBOX mount -t devpts devpts "$CHROOTMGR_ENV"/dev/pts
+
+    # Mounts the /dev/shm filesystem
+    mkdir -p "$CHROOTMGR_ENV"/dev/shm
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/dev/shm && $BUSYBOX mount -o rw,nosuid,nodev,mode=1777 -t tmpfs tmpfs "$CHROOTMGR_ENV"/dev/shm
+
+    # Mounts the /sdcard filesystem
+    mkdir -p "$CHROOTMGR_ENV"/sdcard
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/sdcard && $BUSYBOX mount -t sdcardfs /sdcard "$CHROOTMGR_ENV"/sdcard
+
+    # Mounts the /sys filesystem
+    mkdir -p "$CHROOTMGR_ENV"/sys
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/sys && $BUSYBOX mount -r -t sysfs /sys "$CHROOTMGR_ENV"/sys
+
+    # Mounts the /system filesystem
+    mkdir -p "$CHROOTMGR_ENV"/system
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/system && $BUSYBOX mount -r /system "$CHROOTMGR_ENV"/system
+
+    # Mounts the /run filesystem
+    mkdir -p "$CHROOTMGR_ENV"/run
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/run && $BUSYBOX mount -o rw,nosuid,nodev,mode=755 -t tmpfs tmpfs "$CHROOTMGR_ENV"/run
+    mkdir -p "$CHROOTMGR_ENV"/run/user/0
+    chmod 700 "$CHROOTMGR_ENV"/run/user/0
+
+    # Mounts the /tmp filesystem
+    mkdir -p "$CHROOTMGR_ENV"/tmp
+    ! $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/tmp && $BUSYBOX mount -t tmpfs -o mode=1777,size=64M tmpfs "$CHROOTMGR_ENV"/tmp
+
+    # Reserves 250MB for shared memory
+    $BUSYBOX sysctl -w kernel.shmmax=268435456
+
+    # Creates the /etc/resolv.conf file
+    true > "$CHROOTMGR_ENV"/etc/resolv.conf
+    for server in 1 2 3 4; do
+        [ -z "$(getprop net.dns$server)" ] && break
+        echo "nameserver $(getprop net.dns$server)" >> "$CHROOTMGR_ENV"/etc/resolv.conf
+    done
+
+    # Creates the /etc/hosts file
+    true > "$CHROOTMGR_ENV"/etc/hosts
+    echo "127.0.0.1     localhost $CHROOTMGR_HNAME" >> "$CHROOTMGR_ENV"/etc/hosts
+    echo "::1           localhost ip6-localhost ip6-loopback" >> "$CHROOTMGR_ENV"/etc/hosts
+    $BUSYBOX hostname "$CHROOTMGR_HNAME"
+
+    # Sets the appropriate environment variables
+    export TMPDIR=/tmp
+    export PATH=/usr/bin:/usr/sbin:/bin:/usr/local/bin:/usr/local/sbin:/system/bin:"$PATH"
+}
+
+# Unmounts the chroot environment
+stop_environment()
+{
+    # Unmounts previously mounted filesystems
+    for mount_point in tmp system sys sdcard mnt/dev-upper dev/pts dev/shm dev proc; do
+        if $BUSYBOX mountpoint -q "$CHROOTMGR_ENV"/$mount_point; then
+            $BUSYBOX umount "$CHROOTMGR_ENV"/${mount_point} 2>/dev/null || $BUSYBOX umount -l "$CHROOTMGR_ENV"/${mount_point} 2>/dev/null
+        fi
+    done
+
+    # Unmounts the root filesystem
+    $BUSYBOX umount "$CHROOTMGR_ENV" || $BUSYBOX umount -l "$CHROOTMGR_ENV" 2>/dev/null
+}
+
+# Prints HELP Usage
+if [ $# -eq 0 ]; then
+    echo "$0: A lightweight utility to create safe, isolated chroot environments."
+    echo "Usage: $0 <img> <mount-point> <command>"
+    exit
+fi
+
+# Checks for a matching architecture
+ARCH=$(getprop ro.product.cpu.abi)
+if [ "$ARCH" != "arm64-v8a" ]; then
+    echo "$0: Unsupported architecture: $ARCH."
+    echo "This script only works on arm64-v8a (aarch64)."
+    exit 1
+fi
+
+# Check if the user has root permissions 
+if [ "$(id -u)" -ne 0 ]; then
+    echo "$0: Missing required super-user permisions."
+    exit 1
+fi
+
+# Checks for popular busybox install locations
+if [ -z "$BUSYBOX" ]; then
+    if [ -x /sbin/busybox ]; then
+        BUSYBOX=/sbin/busybox
+    elif [ -x /system/bin/busybox ]; then
+        BUSYBOX=/system/bin/busybox
+    elif [ -x /system/xbin/busybox ]; then
+        BUSYBOX=/system/xbin/busybox
+    elif [ -x /data/local/bin/busybox ]; then
+        BUSYBOX=/data/local/bin/busybox
+    else
+        echo "$0: Cannot locate the busybox binary."
+        echo "Manually set it using the $BUSYBOX variable."
+        exit 1
+    fi
+fi
+
+# Configures parameters
+CHROOTMGR_IMG=$1
+CHROOTMGR_ENV=$2
+shift 2
+# shellcheck disable=SC2124
+CHROOTMGR_EXEC=$@
+CHROOTMGR_HNAME="$(basename "$CHROOTMGR_ENV")"
+
+# Pass 1: Sets up the private mount namespace
+if [ -z "$ACC_MARK" ]; then
+    export ACC_MARK=1
+
+    # Makes the script trigger "stop_environment" on exit
+    trap 'stop_environment' EXIT INT TERM
+
+    # Creates a private mount namespace
+    # shellcheck disable=SC2068
+    if ! $BUSYBOX unshare --mount sh "$0" $@; then
+        echo "$0: Failed to create a private mountpoint."
+        exit 1
+    fi
+
+    echo "$0: Stopping environment: \"$CHROOTMGR_ENV\""
+    stop_environment
+
+    unset ACC_MARK
+
+# Pass 2: Sets up the linux filesystem
+else
+    # Defines the default chroot command
+    if [ -z "$CHROOTMGR_EXEC" ]; then
+        CHROOTMGR_EXEC="/bin/su"
+    fi
+
+    echo "$0: Starting environment: \"$CHROOTMGR_ENV\""
+    start_environment
+
+    echo "$0: Running chroot command: \"$CHROOTMGR_EXEC\""
+    # shellcheck disable=SC2086
+    $BUSYBOX chroot "$CHROOTMGR_ENV" $CHROOTMGR_EXEC
+fi
